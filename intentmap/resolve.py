@@ -25,13 +25,33 @@ from typing import List, Optional
 
 @dataclass(frozen=True)
 class Anchor:
-    """A parsed `path::symbol` reference."""
+    """
+    A parsed `path::symbol` reference, optionally pinned to a commit.
+
+    The optional pin -- `path::symbol@<commit>:<start>-<end>` -- records
+    the line range that satisfied the requirement *in that commit*. That
+    is a historical fact, so it never needs rewriting as the file moves
+    around it; it only becomes interesting when those specific lines
+    themselves change, which `pin_drift` detects.
+    """
 
     path: str
     symbol: Optional[str] = None
+    commit: Optional[str] = None
+    start: Optional[int] = None
+    end: Optional[int] = None
+
+    @property
+    def pinned(self) -> bool:
+        return self.commit is not None and self.start is not None
 
     def __str__(self) -> str:
-        return f"{self.path}::{self.symbol}" if self.symbol else self.path
+        text = f"{self.path}::{self.symbol}" if self.symbol else self.path
+        if self.pinned:
+            span = (f"{self.start}-{self.end}" if self.end and self.end != self.start
+                    else str(self.start))
+            text += f"@{self.commit}:{span}"
+        return text
 
 
 @dataclass
@@ -49,13 +69,32 @@ class Resolution:
         return self.exists and self.found
 
 
+_PIN_RE = re.compile(r'@(?P<commit>[0-9a-fA-F]{4,40}):'
+                     r'(?P<start>\d+)(?:-(?P<end>\d+))?$')
+
+
 def parse_anchor(text: str) -> Anchor:
-    """Parse `path::symbol` (or a bare path) into an Anchor."""
+    """
+    Parse an anchor reference.
+
+        path/to/file.py
+        path/to/file.py::symbol
+        path/to/file.py::symbol@a1b2c3d:120-165     (commit-pinned)
+    """
     text = text.strip()
+    commit = start = end = None
+
+    pin = _PIN_RE.search(text)
+    if pin:
+        commit = pin.group('commit')
+        start = int(pin.group('start'))
+        end = int(pin.group('end') or start)
+        text = text[:pin.start()]
+
     if '::' in text:
         path, _, symbol = text.partition('::')
-        return Anchor(path.strip(), symbol.strip() or None)
-    return Anchor(text)
+        return Anchor(path.strip(), symbol.strip() or None, commit, start, end)
+    return Anchor(text.strip(), None, commit, start, end)
 
 
 def _python_symbol_lines(source: str) -> dict:
@@ -165,3 +204,78 @@ def search_history(root: Path, symbol: str, limit: int = 3) -> List[str]:
             if line.strip():
                 findings.append(f'changed in {line.strip()}')
     return findings[:limit]
+
+
+@dataclass
+class Drift:
+    """Whether a pinned line range has changed since it was pinned."""
+
+    anchor: Anchor
+    checked: bool          # the pin could actually be evaluated
+    changed: bool          # those lines changed since the pinned commit
+    commits: List[str] = None   # commits that touched them
+    reason: str = ''
+
+    @property
+    def needs_review(self) -> bool:
+        return self.checked and self.changed
+
+
+def pin_drift(anchor: Anchor, root: Path) -> Drift:
+    """
+    Has the pinned line range changed since the commit it was pinned at?
+
+    This is what makes a pin worth having: it answers "do the docs
+    actually need updating?" rather than nagging on every edit to the
+    file. Unchanged lines mean the description still describes reality,
+    however much the rest of the file moved.
+
+    Implemented with `git log -L<start>,<end>:<file>`, which follows the
+    range through history rather than comparing raw line numbers.
+    """
+    if not anchor.pinned:
+        return Drift(anchor, False, False, [], 'not pinned')
+
+    out = _git(root, 'log', '--format=%h %ad %s', '--date=short',
+               f'-L{anchor.start},{anchor.end}:{anchor.path}',
+               f'{anchor.commit}..HEAD')
+    if out is None:
+        return Drift(anchor, False, False, [],
+                     'git unavailable, or commit/path unknown to this repo')
+
+    commits = [line.strip() for line in out.splitlines()
+               if line.strip() and not line.startswith(('diff', '---', '+++',
+                                                        '@@', '+', '-', ' '))]
+    return Drift(anchor, True, bool(commits), commits)
+
+
+def pin_at_head(anchor: Anchor, root: Path) -> Optional[Anchor]:
+    """
+    Build a pin for `anchor` at the current commit: resolve the symbol,
+    measure its extent, and stamp it with HEAD. Used by `intentmap pin`
+    to create pins and to refresh one after a deliberate change.
+    """
+    res = resolve(anchor, root)
+    if not res.ok or res.line is None:
+        return None
+
+    head = _git(root, 'rev-parse', '--short', 'HEAD')
+    if not head:
+        return None
+
+    path = Path(root) / anchor.path
+    end = res.line
+    if path.suffix == '.py' and anchor.symbol:
+        try:
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef))
+                        and node.name == anchor.symbol.split('.')[-1]
+                        and node.lineno == res.line):
+                    end = getattr(node, 'end_lineno', res.line) or res.line
+                    break
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            pass
+
+    return Anchor(anchor.path, anchor.symbol, head.strip(), res.line, end)

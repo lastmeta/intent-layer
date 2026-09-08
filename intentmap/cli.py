@@ -16,7 +16,8 @@ from pathlib import Path
 
 from .model import MapError, load_map
 from .report import (check, find_orphan_symbols, format_check, format_show)
-from .resolve import last_commit_touching, parse_anchor, resolve, search_history
+from .resolve import (last_commit_touching, parse_anchor, pin_at_head,
+                      resolve, search_history)
 
 DEFAULT_MAP = 'map/intent-map.yaml'
 
@@ -42,6 +43,13 @@ def main(argv=None) -> int:
 
     sub.add_parser('check', help='verify every anchor resolves (exit 1 if not)')
 
+    p_pin = sub.add_parser(
+        'pin', help='print an anchor pinned to the current commit and lines')
+    p_pin.add_argument('anchor', help='path::symbol')
+
+    sub.add_parser('drift',
+                   help='which pinned line ranges have changed since pinning')
+
     p_show = sub.add_parser('show', help='print the description with anchors')
     p_show.add_argument('id', nargs='?', help='show only this requirement')
 
@@ -66,6 +74,33 @@ def main(argv=None) -> int:
         result = check(requirements, root)
         print(format_check(requirements, result, root))
         return 0 if result.ok else 1
+
+    if args.command == 'pin':
+        anchor = parse_anchor(args.anchor)
+        pinned = pin_at_head(anchor, root)
+        if pinned is None:
+            print(f"cannot pin {anchor}: symbol not found, or not a git "
+                  f"repository", file=sys.stderr)
+            return 1
+        print(pinned)
+        return 0
+
+    if args.command == 'drift':
+        result = check(requirements, root)
+        pinned_total = sum(len(ds) for ds in result.drifts.values())
+        for req_id, drifts in result.drifts.items():
+            for drift in drifts:
+                if drift.needs_review:
+                    print(f"{req_id}: {drift.anchor}")
+                    for commit in drift.commits[:3]:
+                        print(f"    touched by: {commit}")
+                elif not drift.checked:
+                    print(f"{req_id}: {drift.anchor}\n    unchecked "
+                          f"({drift.reason})")
+        if not result.drifted:
+            print(f"no drift -- {pinned_total} pinned range(s) unchanged "
+                  f"since they were pinned")
+        return 0
 
     if args.command == 'show':
         if args.id and not any(r.id == args.id for r in requirements):

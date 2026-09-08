@@ -37,14 +37,31 @@ class MapError(Exception):
 
 @dataclass
 class Requirement:
-    """One requirement and everything the map claims about it."""
+    """
+    One requirement and everything the map claims about it.
+
+    The prose fields are the map's real content. Because anchors point at
+    code instead of copying it, the map has room to explain -- `how` the
+    anchored code produces the described behavior, what it `depends` on,
+    and the `gotchas` a maintainer needs. These are expected to be
+    retuned continually as understanding improves.
+    """
 
     id: str
     statement: str
     implementation: List[str] = field(default_factory=list)
     tests: List[str] = field(default_factory=list)
+    how: Optional[str] = None        # how the code produces the behavior
+    depends: List[str] = field(default_factory=list)  # what it relies on
+    gotchas: Optional[str] = None    # what will bite you
     note: Optional[str] = None
     line: int = 0  # line in the map file, for error messages
+    source: str = ''  # which map file this came from (multi-file maps)
+
+    @property
+    def has_prose(self) -> bool:
+        """Does the map explain this requirement, not just point at it?"""
+        return bool(self.how)
 
     @property
     def is_proven(self) -> bool:
@@ -58,7 +75,8 @@ class Requirement:
 
 
 _ID_RE = re.compile(r'^[A-Za-z][A-Za-z0-9]*-\d+$')
-_KEYS = {'id', 'statement', 'implementation', 'tests', 'note'}
+_KEYS = {'id', 'statement', 'implementation', 'tests', 'how', 'depends',
+         'gotchas', 'note'}
 
 
 def _clean(value: str) -> str:
@@ -115,6 +133,9 @@ def parse_map(text: str) -> List[Requirement]:
                 statement=current['statement'],
                 implementation=current.get('implementation', []),
                 tests=current.get('tests', []),
+                how=current.get('how'),
+                depends=current.get('depends', []),
+                gotchas=current.get('gotchas'),
                 note=current.get('note'),
                 line=current_line))
             current = None
@@ -181,12 +202,45 @@ def parse_map(text: str) -> List[Requirement]:
 
 
 def load_map(path: Path) -> List[Requirement]:
-    """Load and parse a map file, with the path named in any error."""
+    """
+    Load a map: either one file, or a directory of map files.
+
+    A small project keeps one document. A large one points this at a
+    directory and organizes the map files to mirror its source tree --
+    same seams, same names -- so the map splits where the code splits.
+    Ids must be unique across the whole map either way.
+    """
+    path = Path(path)
+    if path.is_dir():
+        return _load_map_dir(path)
+
     try:
-        text = Path(path).read_text()
+        text = path.read_text()
     except OSError as e:
         raise MapError(f"cannot read map file {path}: {e}") from e
     try:
-        return parse_map(text)
+        requirements = parse_map(text)
     except MapError as e:
         raise MapError(f"{path}: {e}") from e
+    for req in requirements:
+        req.source = str(path)
+    return requirements
+
+
+def _load_map_dir(directory: Path) -> List[Requirement]:
+    """Load every *.yaml under a map directory, recursively, in path order."""
+    files = sorted(p for p in directory.rglob('*.yaml') if p.is_file())
+    if not files:
+        raise MapError(f"no .yaml map files found under {directory}")
+
+    requirements: List[Requirement] = []
+    seen: dict = {}
+    for file in files:
+        for req in load_map(file):
+            if req.id in seen:
+                raise MapError(
+                    f"duplicate id {req.id} in {file} "
+                    f"(already defined in {seen[req.id]})")
+            seen[req.id] = req.source
+            requirements.append(req)
+    return requirements
