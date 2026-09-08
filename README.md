@@ -111,7 +111,8 @@ appended to `docs/INTENT.md` verbatim, under a dated heading.
 4. Write `map/intent-map.yaml`, anchoring each statement to the functions
    that implement it and the tests that prove it. Requirements with no
    test are listed as `UNPROVEN` rather than quietly omitted — an honest
-   gap beats a false claim.
+   gap beats a false claim. `examples/example-map.yaml` shows every field
+   the format supports.
 5. Run `python -m intentmap check` and install the hooks.
 
 Nothing has to be restructured: the map sits beside the code and names it
