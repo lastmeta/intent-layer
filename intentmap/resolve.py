@@ -239,6 +239,7 @@ def pin_drift(anchor: Anchor, root: Path) -> Drift:
     range through history rather than comparing raw line numbers.
     """
     if not anchor.pinned:
+        # nothing to compare against without a pin
         return Drift(anchor, False, False, [], 'not pinned')
 
     out = _git(root, 'log', '--format=%h %ad %s', '--date=short',
