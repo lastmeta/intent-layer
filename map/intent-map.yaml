@@ -169,7 +169,7 @@
     reason to review. `intentmap drift` reports it, and `check` folds it
     into its summary.
   implementation:
-    - intentmap/resolve.py::pin_drift@6360f45:224-249
+    - intentmap/resolve.py::pin_drift@a0af2a5:229-255
     - intentmap/report.py::check@6360f45:51-74
   tests:
     - tests/test_resolve.py::TestPinDrift
@@ -384,7 +384,7 @@
     revisiting.
   implementation:
     - hooks/pre-commit
-    - intentmap/resolve.py::pin_drift@6360f45:224-249
+    - intentmap/resolve.py::pin_drift@a0af2a5:229-255
   tests:
     - tests/test_cli.py::TestCheckExitCode
     - tests/test_cli.py::TestDriftCommand
