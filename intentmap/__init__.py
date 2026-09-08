@@ -13,12 +13,14 @@ Or from the command line: `python -m intentmap check`.
 
 from .model import MapError, Requirement, load_map, parse_map
 from .report import CheckResult, check, find_orphan_symbols, format_check, format_show
-from .resolve import Anchor, Resolution, parse_anchor, resolve, search_history
+from .resolve import (Anchor, Drift, Resolution, parse_anchor, pin_at_head,
+                      pin_drift, resolve, search_history)
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 __all__ = [
     'MapError', 'Requirement', 'load_map', 'parse_map',
     'CheckResult', 'check', 'find_orphan_symbols', 'format_check', 'format_show',
-    'Anchor', 'Resolution', 'parse_anchor', 'resolve', 'search_history',
+    'Anchor', 'Drift', 'Resolution', 'parse_anchor', 'pin_at_head',
+    'pin_drift', 'resolve', 'search_history',
 ]

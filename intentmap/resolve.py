@@ -206,11 +206,6 @@ def search_history(root: Path, symbol: str, limit: int = 3) -> List[str]:
     return findings[:limit]
 
 
-# ---------------------------------------------------------------
-# (a deliberately unrelated comment block, inserted to shift lines)
-# ---------------------------------------------------------------
-
-
 @dataclass
 class Drift:
     """Whether a pinned line range has changed since it was pinned."""
