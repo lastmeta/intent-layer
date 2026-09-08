@@ -1,21 +1,39 @@
 # Intent Map, mapped by itself.
 #
-# One entry per requirement in docs/DESC.md. Anchors are `path::symbol`
-# -- never line numbers. Run `python -m intentmap check` after any change
-# to the code or this file; updating them together is the whole point.
+# One entry per requirement in docs/DESC.md.
+#
+#   implementation / tests   `path::symbol`, optionally pinned as
+#                            `path::symbol@<commit>:<start>-<end>` -- a
+#                            historical fact that stays true as the file
+#                            moves around it. `intentmap pin` writes them;
+#                            `intentmap drift` flags the ones whose lines
+#                            have since changed.
+#   how                      how the anchored code produces the statement
+#   depends                  what it relies on
+#   gotchas                  what will bite someone changing it
+#
+# The prose is the point. Because the map never copies code, it has room
+# to explain -- and it is expected to be retuned continually.
 
 - id: R-1
   statement: >
     The verbatim intent must be preserved unedited, append-only, in
     docs/INTENT.md, and treated as the authority when any derived document
     disagrees with it.
+  how: >
+    A plain markdown file of dated headings, each followed by the owner's
+    words as a blockquote. Nothing in the tool ever writes to it except
+    the capture hook, which only appends. Its own header states that it
+    outranks every derived document, so a reader who finds a contradiction
+    knows which side to believe.
   implementation:
     - docs/INTENT.md
   tests:
     - tests/test_docs.py::TestIntentFile
-  note: >
-    Enforced by convention and by a test that the file exists and carries
-    a dated verbatim entry; nothing mechanical can stop a human editing it.
+  gotchas: >
+    Nothing mechanical can stop a human editing history here. The
+    append-only rule is a discipline; the tests only check that the file
+    still looks like a dated verbatim record.
 
 - id: R-2
   statement: >
@@ -23,42 +41,78 @@
     language: an overview plus a flat list of statements of how the system
     must behave, regenerated whole rather than patched, keeping no record
     of its own past versions.
+  how: >
+    docs/DESC.md is rewritten from scratch each time the intent grows.
+    A test scans it for changelog-ish language ("previously", "used to
+    be", version markers) and fails if any appears, which is the
+    mechanical expression of "the description has no memory".
   implementation:
     - docs/DESC.md
   tests:
     - tests/test_docs.py::TestDescFile
+  depends:
+    - "R-1: the history it deliberately forgets lives in INTENT.md and git"
 
 - id: R-3
   statement: >
     Each requirement must carry a stable identifier that survives
     rewording, so anchors and history stay attached to the requirement
     rather than to a sentence.
+  how: >
+    Requirement ids look like `R-4` and are validated by a regex at parse
+    time; the parser rejects duplicates across the whole map. Everything
+    else -- anchors, drift reports, discussion -- refers to the id, so a
+    statement can be reworded freely without breaking a single reference.
   implementation:
-    - intentmap/model.py::Requirement
+    - intentmap/model.py::Requirement@6360f45:39-74
     - intentmap/model.py::parse_map
   tests:
     - tests/test_model.py::TestParseMap
     - tests/test_model.py::TestIdValidation
+  gotchas: >
+    Ids are never reused. When a requirement disappears, its number
+    retires with it -- reusing it would silently re-point old references.
 
 - id: R-4
   statement: >
-    Each requirement must be anchored to the code that implements it by
-    file path plus function or class name -- never by line number, because
-    line numbers change constantly and would rot the map on every edit.
+    Capturing intent must be automatic rather than remembered: the project
+    must ship a hook that appends the conversation to the intent folder,
+    so the record stays complete without anyone choosing to keep it.
+  how: >
+    hooks/capture-intent.py reads the harness's UserPromptSubmit JSON on
+    stdin (or plain text with --plain), extracts the prompt, and appends
+    it verbatim as a blockquote under today's heading, creating the file
+    if needed. It filters slash-commands and very short prompts, which
+    operate the tool rather than express intent.
   implementation:
-    - intentmap/resolve.py::Anchor
-    - intentmap/resolve.py::parse_anchor
+    - hooks/capture-intent.py::append@6360f45:84-100
+    - hooks/capture-intent.py::read_prompt
+    - hooks/capture-intent.py::is_intent
   tests:
-    - tests/test_resolve.py::TestParseAnchor
+    - tests/test_capture.py::TestReadPrompt
+    - tests/test_capture.py::TestIsIntent
+    - tests/test_capture.py::TestAppend
+  gotchas: >
+    The hook exits 0 unconditionally, even on failure -- a broken capture
+    must never block the human's actual work. That means a silent failure
+    is possible by design; check the file occasionally.
 
 - id: R-5
   statement: >
-    Each requirement must be anchored to the tests that prove it, by the
-    same path-plus-name addressing, so a reader can see what evidence
-    exists for each claim.
+    Each requirement must be anchored to the code that implements it by
+    file path plus function or class name, and to the tests that prove it
+    by the same addressing, so a reader can see both what does the work
+    and what evidence exists for it.
+  how: >
+    Anchors parse as `path::symbol`, with `Class.method` supported.
+    Implementation and test anchors use identical addressing and identical
+    resolution, so nothing special distinguishes proof from work except
+    which list it sits in.
   implementation:
-    - intentmap/model.py::Requirement
+    - intentmap/resolve.py::Anchor@6360f45:27-54
+    - intentmap/resolve.py::parse_anchor@6360f45:76-97
   tests:
+    - tests/test_resolve.py::TestParseAnchor
     - tests/test_model.py::TestParseMap
 
 - id: R-6
@@ -66,136 +120,303 @@
     A requirement that has no test must be marked as unproven rather than
     silently listed, so the reader can tell verified claims from asserted
     ones.
+  how: >
+    Requirement.is_proven is simply "has at least one test anchor", and
+    every report prints UNPROVEN in the header of such a requirement and
+    lists it in the coverage summary. An honest gap is worth more than a
+    quiet omission.
   implementation:
     - intentmap/model.py::Requirement.is_proven
-    - intentmap/report.py::format_show
+    - intentmap/report.py::format_show@6360f45:136-187
   tests:
     - tests/test_report.py::TestUnprovenMarking
 
 - id: R-7
   statement: >
-    Anchors must be checkable: a tool must confirm every anchored file
-    exists and every anchored function or class is actually present in it,
-    and report anything stale.
+    An anchor may additionally be pinned to a commit and the line range
+    that satisfied the requirement in that commit. A pin is a historical
+    fact that never needs rewriting: it stays true no matter how the file
+    moves around it, and only becomes worth revisiting when those
+    particular lines themselves change.
+  how: >
+    The pin suffix `@<commit>:<start>-<end>` is parsed off the anchor and
+    kept on the Anchor object. `intentmap pin path::symbol` writes one:
+    it resolves the symbol, measures its extent with the AST, and stamps
+    it with the current HEAD. Because the pin names a commit, it describes
+    what was true then -- which is why it never goes out of date.
   implementation:
-    - intentmap/resolve.py::resolve
-    - intentmap/report.py::check
+    - intentmap/resolve.py::Anchor@6360f45:27-54
+    - intentmap/resolve.py::pin_at_head@6360f45:252-281
   tests:
-    - tests/test_resolve.py::TestResolve
-    - tests/test_report.py::TestCheck
+    - tests/test_resolve.py::TestPinParsing
+    - tests/test_resolve.py::TestPinAtHead
+  gotchas: >
+    A pin is optional. Unpinned anchors still work exactly as before --
+    pinning buys drift detection, at the cost of a re-pin whenever the
+    lines genuinely change.
 
 - id: R-8
   statement: >
-    Because anchors name symbols rather than lines, the tool must be able
-    to resolve any anchor to its current line number on demand, so a human
-    can jump straight to the code.
+    The tool must detect when pinned lines have changed since the commit
+    they were pinned at, and flag exactly those requirements for review,
+    so nobody is told to update documentation that no longer needs
+    updating.
+  how: >
+    pin_drift runs `git log -L<start>,<end>:<file> <commit>..HEAD`, which
+    follows that specific range through history rather than comparing raw
+    line numbers. No commits means the lines are untouched and the
+    description still describes reality; any commits are listed as the
+    reason to review. `intentmap drift` reports it, and `check` folds it
+    into its summary.
+  implementation:
+    - intentmap/resolve.py::pin_drift@6360f45:224-249
+    - intentmap/report.py::check@6360f45:51-74
+  tests:
+    - tests/test_resolve.py::TestPinDrift
+    - tests/test_report.py::TestDriftReporting
+  depends:
+    - "R-7: there is nothing to detect drift against without a pin"
+  gotchas: >
+    Drift is flagged, never fatal -- it does not fail `check`. Changed
+    lines mean "a human should confirm the statement still holds", which
+    is a judgment call, not an error. Drift also cannot be evaluated
+    outside a git repository, or when the pinned commit is unknown to the
+    clone; those are reported as unchecked rather than clean.
+
+- id: R-9
+  statement: >
+    Anchors must be checkable: the tool must confirm every anchored file
+    exists and every anchored function or class is present in it, and
+    report anything stale.
+  how: >
+    resolve() checks the file, then looks for the symbol -- with the AST
+    for Python (exact) and a regex scan of common definition forms for
+    other languages. check() runs it over every anchor in the map and
+    collects the failures.
+  implementation:
+    - intentmap/resolve.py::resolve
+    - intentmap/report.py::check@6360f45:51-74
+  tests:
+    - tests/test_resolve.py::TestResolve
+    - tests/test_report.py::TestCheck
+  gotchas: >
+    Non-Python resolution is a heuristic, not a parser. It will miss
+    unusual definition syntax; when it does, anchor the file alone rather
+    than inventing a symbol that cannot be found.
+
+- id: R-10
+  statement: >
+    Because anchors name symbols rather than lines, the tool must resolve
+    any anchor to its current line number on demand, so a human can jump
+    straight to the code.
+  how: >
+    Line numbers are computed at read time and never stored in the map, so
+    editing above a function cannot rot its anchor. `show` prints
+    `path:line` for every anchor and `where` does it for one.
   implementation:
     - intentmap/resolve.py::resolve
     - intentmap/cli.py::main
   tests:
     - tests/test_resolve.py::TestResolveLineNumbers
+  depends:
+    - "R-7: pins record historical lines, this reports current ones"
 
-- id: R-9
+- id: R-11
   statement: >
     When a symbol has been renamed or moved, git history must be used to
     find where it went and to report the last commit that touched it, so a
     stale anchor can be repaired rather than merely reported broken.
+  how: >
+    search_history first greps the working tree for a definition of the
+    name (a moved symbol usually still exists somewhere), then falls back
+    to `git log -S` for commits that added or removed it.
+    last_commit_touching names the most recent commit on the path. Both
+    are printed under any broken anchor.
   implementation:
     - intentmap/resolve.py::search_history
     - intentmap/resolve.py::last_commit_touching
   tests:
     - tests/test_resolve.py::TestHistory
+  gotchas: >
+    Both return quietly when git is unavailable or the directory is not a
+    repository -- the tool must still work in a plain folder.
 
-- id: R-10
+- id: R-12
+  statement: >
+    Because the map does not copy code, it must carry prose: a human-level
+    explanation of how the anchored code produces the described behavior,
+    what it depends on, and the gotchas worth knowing. That explanation is
+    the map's real content and is expected to be retuned continually.
+  how: >
+    Requirement carries `how`, `depends` and `gotchas` alongside its
+    anchors, and format_show prints them with the statement. A
+    requirement with no `how` is counted as unexplained in the coverage
+    summary, so missing explanation is visible rather than invisible.
+  implementation:
+    - intentmap/model.py::Requirement@6360f45:39-74
+    - intentmap/report.py::format_show@6360f45:136-187
+  tests:
+    - tests/test_model.py::TestProseFields
+    - tests/test_report.py::TestProseInShow
+
+- id: R-13
   statement: >
     The map must be machine-readable and human-editable, one entry per
     requirement, kept in the repository next to the code it describes.
+  how: >
+    A small hand-written parser reads the YAML subset the format actually
+    uses -- entries, scalars, block scalars, lists, comments -- and
+    rejects unknown keys, missing statements, bad ids and duplicates with
+    the offending line number.
   implementation:
     - map/intent-map.yaml
-    - intentmap/model.py::load_map
+    - intentmap/model.py::parse_map
+    - intentmap/model.py::load_map@6360f45:204-227
   tests:
     - tests/test_model.py::TestLoadMap
     - tests/test_selfmap.py::TestSelfMap
 
-- id: R-11
+- id: R-14
   statement: >
-    The tool must be able to report coverage: which requirements have
-    implementation anchors, which have test anchors, and which have
-    neither.
+    The map must work either as one file or as many files organized to
+    mirror the code, so a small project can keep one document and a large
+    one can split the map along the same seams as its source.
+  how: >
+    load_map takes a file or a directory. Given a directory it reads every
+    *.yaml beneath it in path order and merges them, enforcing unique ids
+    across the whole set and remembering which file each requirement came
+    from. Mirroring the source tree is then just a naming convention --
+    map/models/training.yaml beside src/models/training.py.
+  implementation:
+    - intentmap/model.py::load_map@6360f45:204-227
+    - intentmap/model.py::_load_map_dir
+  tests:
+    - tests/test_model.py::TestMultiFileMap
+  gotchas: >
+    Ids are global across a split map, not per-file. That is deliberate --
+    an id must mean one thing in the whole project.
+
+- id: R-15
+  statement: >
+    The tool must report coverage: which requirements have implementation
+    anchors, which have test anchors, and which have neither.
+  how: >
+    CheckResult accumulates unanchored, unproven and unexplained id lists
+    while checking, and format_check prints the counts plus each list, so
+    the gaps are named rather than merely counted.
   implementation:
     - intentmap/report.py::CheckResult
     - intentmap/report.py::format_check
   tests:
     - tests/test_report.py::TestCoverage
 
-- id: R-12
+- id: R-16
   statement: >
-    The tool must be able to find orphans in both directions: requirements
-    with no anchors, and source symbols that no requirement claims -- the
-    second is how you notice code nobody asked for.
+    The tool must find orphans in both directions: requirements with no
+    anchors, and source symbols that no requirement claims -- the second
+    is how you notice code nobody asked for.
+  how: >
+    find_orphan_symbols walks the given source directories with the AST,
+    collects every public top-level function and class, and subtracts
+    everything the map claims. The `orphans` command prints both
+    directions together.
   implementation:
     - intentmap/report.py::find_orphan_symbols
   tests:
     - tests/test_report.py::TestOrphans
+  gotchas: >
+    Underscore-private symbols are skipped by default; helpers are
+    implementation detail, not unclaimed features.
 
-- id: R-13
+- id: R-17
   statement: >
     The check must be runnable as one command that exits non-zero on
     failure, so it can run in CI or a pre-commit hook and block a change
     that breaks the correspondence.
+  how: >
+    `intentmap check` returns 0 when every anchor resolves, 1 when any is
+    broken, and 2 when the map itself will not parse. hooks/pre-commit
+    runs it from the repository root and refuses the commit on failure.
   implementation:
     - intentmap/cli.py::main
     - hooks/pre-commit
   tests:
     - tests/test_cli.py::TestCheckExitCode
 
-- id: R-14
+- id: R-18
   statement: >
     The tool must run standalone with no third-party dependencies, so
     adopting the pattern costs a folder and nothing else.
+  how: >
+    Everything uses the standard library only -- ast, re, subprocess,
+    argparse, pathlib, dataclasses. The map parser is hand-rolled
+    precisely to avoid a YAML dependency, and a test walks every import in
+    the package to enforce it.
   implementation:
     - intentmap/model.py::parse_map
   tests:
     - tests/test_selfmap.py::TestNoThirdPartyImports
 
-- id: R-15
+- id: R-19
   statement: >
     The pattern must be adoptable by an existing repository without
     restructuring it: the map lives beside the code and names it by path.
+  how: >
+    --root and --map are independent, so the tool can live in one
+    repository and check another; anchors are plain relative paths.
+    examples/example-map.yaml shows a complete map for a repository that
+    is not this one.
   implementation:
     - intentmap/cli.py::main
+    - examples/example-map.yaml
   tests:
     - tests/test_cli.py::TestExternalRoot
 
-- id: R-16
+- id: R-20
   statement: >
     Updating the code and updating the map must be treated as one action,
     not two, so the map cannot drift out of date between commits.
+  how: >
+    The pre-commit hook runs check and blocks the commit that broke an
+    anchor, so the repair happens in the same change rather than later.
+    Pins add the softer half: `drift` names the requirements whose lines
+    actually changed, which is the list of documents genuinely worth
+    revisiting.
   implementation:
     - hooks/pre-commit
+    - intentmap/resolve.py::pin_drift@6360f45:224-249
   tests:
     - tests/test_cli.py::TestCheckExitCode
+    - tests/test_cli.py::TestDriftCommand
   note: >
-    The hook is the mechanism; the discipline is the point. A broken
-    anchor blocks the commit that broke it.
+    The hook is the mechanism; the discipline is the point.
 
-- id: R-17
+- id: R-21
   statement: >
     A human must be able to ask for the description at any time and
-    receive a report showing each requirement with its implementation, its
-    tests, and its verification status.
+    receive a report showing each requirement with its explanation, its
+    implementation, its tests, and its verification status.
+  how: >
+    `intentmap show` prints every requirement: statement, prose, anchors
+    resolved to current line numbers, broken ones marked inline, and
+    proven/UNPROVEN in the header. `show R-7` narrows it to one.
   implementation:
-    - intentmap/report.py::format_show
+    - intentmap/report.py::format_show@6360f45:136-187
     - intentmap/cli.py::main
   tests:
     - tests/test_report.py::TestFormatShow
     - tests/test_cli.py::TestShowCommand
 
-- id: R-18
+- id: R-22
   statement: >
     The pattern must remain useful as documentation on its own: the
     description must read as prose a person can follow without running any
     tool.
+  how: >
+    DESC.md is written as sentences, carries no anchors or file paths, and
+    is tested for both -- statements must end as sentences and the
+    document must contain no `::` or `.py`. The machine-readable half
+    lives here in the map instead.
   implementation:
     - docs/DESC.md
     - README.md

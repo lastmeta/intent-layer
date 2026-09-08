@@ -174,7 +174,10 @@ def parse_map(text: str) -> List[Requirement]:
             continue
 
         if ':' not in stripped:
-            raise MapError(f"line {lineno}: expected 'key: value', got {stripped!r}")
+            raise MapError(
+                f"line {lineno}: expected 'key: value', got {stripped!r} "
+                f"(list items must fit on one line -- use a '>' block scalar "
+                f"for anything longer)")
 
         key, _, value = stripped.partition(':')
         key, value = key.strip(), value.strip()

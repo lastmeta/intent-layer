@@ -107,5 +107,78 @@ class TestLoadMap(unittest.TestCase):
         self.assertIn('map.yaml', str(ctx.exception))
 
 
+class TestProseFields(unittest.TestCase):
+    """The map explains; it does not merely point."""
+
+    MAP = """
+- id: R-1
+  statement: The thing must work.
+  how: >
+    It works because the widget spins the sprocket, which is what
+    "working" means here.
+  depends:
+    - "R-2: the sprocket exists"
+  gotchas: >
+    Spinning backwards looks identical but is not.
+  implementation:
+    - src/a.py::spin
+"""
+
+    def setUp(self):
+        self.req = parse_map(self.MAP)[0]
+
+    def test_how_is_parsed_and_folded(self):
+        self.assertIn('widget spins the sprocket', self.req.how)
+
+    def test_depends_is_a_list(self):
+        self.assertEqual(self.req.depends, ['R-2: the sprocket exists'])
+
+    def test_gotchas_parsed(self):
+        self.assertIn('backwards', self.req.gotchas)
+
+    def test_has_prose_flag(self):
+        self.assertTrue(self.req.has_prose)
+
+    def test_requirement_without_how_is_unexplained(self):
+        req = parse_map('- id: R-9\n  statement: bare.\n')[0]
+        self.assertFalse(req.has_prose)
+
+
+class TestMultiFileMap(unittest.TestCase):
+    """One file for a small project; a mirrored tree for a large one."""
+
+    def test_directory_of_maps_merges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'map'
+            (root / 'models').mkdir(parents=True)
+            (root / 'core.yaml').write_text('- id: R-1\n  statement: Core works.\n')
+            (root / 'models' / 'training.yaml').write_text(
+                '- id: R-2\n  statement: Training works.\n')
+            reqs = load_map(root)
+            self.assertEqual(sorted(r.id for r in reqs), ['R-1', 'R-2'])
+
+    def test_records_source_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'map'
+            root.mkdir(parents=True)
+            (root / 'core.yaml').write_text('- id: R-1\n  statement: x.\n')
+            self.assertTrue(load_map(root)[0].source.endswith('core.yaml'))
+
+    def test_duplicate_ids_across_files_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'map'
+            root.mkdir(parents=True)
+            (root / 'a.yaml').write_text('- id: R-1\n  statement: x.\n')
+            (root / 'b.yaml').write_text('- id: R-1\n  statement: y.\n')
+            with self.assertRaises(MapError) as ctx:
+                load_map(root)
+            self.assertIn('duplicate', str(ctx.exception))
+
+    def test_empty_directory_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(MapError):
+                load_map(Path(tmp))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -126,5 +126,33 @@ class TestExternalRoot(_CliRepo):
         self.assertEqual(code, 0)
 
 
+class TestDriftCommand(_CliRepo):
+    def test_reports_no_drift_for_unpinned_map(self):
+        self.write_map(GOOD_MAP)
+        code, text = self.run_cli('drift')
+        self.assertEqual(code, 0)
+        self.assertIn('no drift', text)
+
+    def test_unresolvable_pin_is_unchecked_not_clean(self):
+        """Outside git, a pin cannot be evaluated -- say so, don't imply OK."""
+        self.write_map(GOOD_MAP.replace('src/mod.py::alpha',
+                                        'src/mod.py::alpha@abc1234:1-2'))
+        code, text = self.run_cli('drift')
+        self.assertEqual(code, 0)
+        self.assertIn('unchecked', text)
+
+
+class TestPinCommand(_CliRepo):
+    def test_pin_outside_git_fails_cleanly(self):
+        self.write_map(GOOD_MAP)
+        code, text = self.run_cli('pin', 'src/mod.py::alpha')
+        self.assertEqual(code, 1)
+        self.assertIn('cannot pin', text)
+
+    def test_pin_missing_symbol_fails(self):
+        self.write_map(GOOD_MAP)
+        self.assertEqual(self.run_cli('pin', 'src/mod.py::gone')[0], 1)
+
+
 if __name__ == '__main__':
     unittest.main()

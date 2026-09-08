@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from intentmap.resolve import (Anchor, last_commit_touching, parse_anchor,
+                               pin_at_head, pin_drift,
                                resolve, search_history)
 
 MODULE = '''"""doc"""
@@ -138,6 +139,113 @@ class TestHistory(_TempRepo):
             self.assertIsNone(last_commit_touching(Path(plain), 'x.py'))
             self.assertEqual(search_history(Path(plain), 'alpha'), [])
 
+
+
+class TestPinParsing(unittest.TestCase):
+    """`path::symbol@commit:start-end` -- a historical fact, not a pointer."""
+
+    def test_parses_commit_and_range(self):
+        anchor = parse_anchor('src/a.py::alpha@a1b2c3d:120-165')
+        self.assertEqual(anchor.path, 'src/a.py')
+        self.assertEqual(anchor.symbol, 'alpha')
+        self.assertEqual(anchor.commit, 'a1b2c3d')
+        self.assertEqual((anchor.start, anchor.end), (120, 165))
+        self.assertTrue(anchor.pinned)
+
+    def test_single_line_pin(self):
+        anchor = parse_anchor('src/a.py::alpha@a1b2c3d:42')
+        self.assertEqual((anchor.start, anchor.end), (42, 42))
+
+    def test_unpinned_anchor_is_not_pinned(self):
+        self.assertFalse(parse_anchor('src/a.py::alpha').pinned)
+
+    def test_round_trips_through_string(self):
+        for text in ('src/a.py::alpha@a1b2c3d:120-165',
+                     'src/a.py::alpha@a1b2c3d:42',
+                     'src/a.py::alpha'):
+            self.assertEqual(str(parse_anchor(text)), text)
+
+    def test_pin_does_not_disturb_symbol(self):
+        self.assertEqual(parse_anchor('a.py::Widget.spin@abc123:5-9').symbol,
+                         'Widget.spin')
+
+
+class TestPinAtHead(_TempRepo):
+    def setUp(self):
+        super().setUp()
+        env = {'GIT_AUTHOR_NAME': 'T', 'GIT_AUTHOR_EMAIL': 't@x',
+               'GIT_COMMITTER_NAME': 'T', 'GIT_COMMITTER_EMAIL': 't@x',
+               'PATH': '/usr/bin:/bin'}
+        self.env = env
+        run = lambda *a: subprocess.run(a, cwd=self.root, env=env,
+                                        capture_output=True)
+        self.run = run
+        run('git', 'init', '-q')
+        run('git', 'add', '-A')
+        run('git', 'commit', '-q', '-m', 'initial')
+        self.git_ok = (self.root / '.git').exists()
+
+    def test_pins_symbol_extent_at_head(self):
+        if not self.git_ok:
+            self.skipTest('git unavailable')
+        pinned = pin_at_head(Anchor('src/mod.py', 'Widget'), self.root)
+        self.assertIsNotNone(pinned)
+        self.assertTrue(pinned.pinned)
+        self.assertEqual(pinned.start, 9)     # class Widget
+        self.assertEqual(pinned.end, 11)      # through its method
+        self.assertRegex(pinned.commit, r'^[0-9a-f]{4,40}$')
+
+    def test_returns_none_for_missing_symbol(self):
+        if not self.git_ok:
+            self.skipTest('git unavailable')
+        self.assertIsNone(pin_at_head(Anchor('src/mod.py', 'gone'), self.root))
+
+
+class TestPinDrift(TestPinAtHead):
+    """The heart of it: unchanged pinned lines mean no doc update needed."""
+
+    def _commit(self, message):
+        self.run('git', 'add', '-A')
+        self.run('git', 'commit', '-q', '-m', message)
+
+    def test_no_drift_when_pinned_lines_untouched(self):
+        if not self.git_ok:
+            self.skipTest('git unavailable')
+        pinned = pin_at_head(Anchor('src/mod.py', 'beta'), self.root)
+        # Edit a DIFFERENT part of the same file, shifting beta downward
+        path = self.root / 'src' / 'mod.py'
+        path.write_text('# a new header comment\n\n' + path.read_text())
+        self._commit('unrelated edit above')
+
+        drift = pin_drift(pinned, self.root)
+        self.assertTrue(drift.checked)
+        self.assertFalse(drift.needs_review,
+                         'moving lines must not count as changing them')
+
+    def test_drift_when_pinned_lines_change(self):
+        if not self.git_ok:
+            self.skipTest('git unavailable')
+        pinned = pin_at_head(Anchor('src/mod.py', 'beta'), self.root)
+        path = self.root / 'src' / 'mod.py'
+        path.write_text(path.read_text().replace('return 3', 'return 999'))
+        self._commit('change beta itself')
+
+        drift = pin_drift(pinned, self.root)
+        self.assertTrue(drift.checked)
+        self.assertTrue(drift.needs_review)
+        self.assertTrue(any('change beta itself' in c for c in drift.commits))
+
+    def test_unpinned_anchor_reports_unchecked(self):
+        drift = pin_drift(Anchor('src/mod.py', 'beta'), self.root)
+        self.assertFalse(drift.checked)
+        self.assertFalse(drift.needs_review)
+
+    def test_unchecked_outside_a_git_repo(self):
+        with tempfile.TemporaryDirectory() as plain:
+            Path(plain, 'x.py').write_text('def a():\n    pass\n')
+            drift = pin_drift(parse_anchor('x.py::a@abc1234:1-2'), Path(plain))
+            self.assertFalse(drift.checked)
+            self.assertFalse(drift.needs_review)
 
 if __name__ == '__main__':
     unittest.main()

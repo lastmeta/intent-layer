@@ -137,5 +137,63 @@ class TestFormatShow(_Repo):
         self.assertNotIn('alpha must work', text)
 
 
+class TestProseInShow(_Repo):
+    """The map's prose is the map's real content, so the report shows it."""
+
+    def test_how_depends_and_gotchas_are_printed(self):
+        reqs = [Requirement('R-1', 'alpha must work', ['src/mod.py::alpha'],
+                            ['tests/test_mod.py::TestAlpha'],
+                            how='It works by returning one.',
+                            depends=['R-2: numbers exist'],
+                            gotchas='Zero is not one.')]
+        text = format_show(reqs, self.root)
+        self.assertIn('how: It works by returning one.', text)
+        self.assertIn('depends on: R-2: numbers exist', text)
+        self.assertIn('gotcha: Zero is not one.', text)
+
+    def test_unexplained_requirement_counted(self):
+        reqs = [Requirement('R-1', 'no explanation', ['src/mod.py::alpha']),
+                Requirement('R-2', 'explained', ['src/mod.py::beta'],
+                            how='because reasons')]
+        result = check(reqs, self.root)
+        self.assertEqual(result.unexplained, ['R-1'])
+
+    def test_summary_reports_explained_count(self):
+        reqs = [Requirement('R-1', 'x', ['src/mod.py::alpha'], how='because')]
+        text = format_check(reqs, check(reqs, self.root), self.root)
+        self.assertIn('1 explained', text)
+
+
+class TestDriftReporting(_Repo):
+    """Drift is flagged for review, never treated as a failure."""
+
+    def test_unpinned_map_has_no_drift(self):
+        reqs = [Requirement('R-1', 'x', ['src/mod.py::alpha'])]
+        result = check(reqs, self.root)
+        self.assertEqual(result.drifted, [])
+        self.assertTrue(result.ok)
+
+    def test_drift_does_not_fail_the_check(self):
+        """Changed lines mean 'a human should look', not 'this is broken'."""
+        from intentmap.resolve import Drift, parse_anchor
+        result = check([Requirement('R-1', 'x', ['src/mod.py::alpha'])],
+                       self.root)
+        anchor = parse_anchor('src/mod.py::alpha@abc1234:1-2')
+        result.drifts['R-1'] = [Drift(anchor, True, True, ['abc1234 today edit'])]
+        self.assertTrue(result.ok, 'drift must not fail the check')
+        self.assertEqual(result.drifted_ids, ['R-1'])
+
+    def test_drift_appears_in_the_report_with_repair_hint(self):
+        from intentmap.resolve import Drift, parse_anchor
+        reqs = [Requirement('R-1', 'x', ['src/mod.py::alpha'])]
+        result = check(reqs, self.root)
+        anchor = parse_anchor('src/mod.py::alpha@abc1234:1-2')
+        result.drifts['R-1'] = [Drift(anchor, True, True, ['abc1234 today edit'])]
+        text = format_check(reqs, result, self.root)
+        self.assertIn('PINNED LINES CHANGED', text)
+        self.assertIn('abc1234 today edit', text)
+        self.assertIn('intentmap pin', text)
+
+
 if __name__ == '__main__':
     unittest.main()
