@@ -1,0 +1,203 @@
+# Intent Map, mapped by itself.
+#
+# One entry per requirement in docs/DESC.md. Anchors are `path::symbol`
+# -- never line numbers. Run `python -m intentmap check` after any change
+# to the code or this file; updating them together is the whole point.
+
+- id: R-1
+  statement: >
+    The verbatim intent must be preserved unedited, append-only, in
+    docs/INTENT.md, and treated as the authority when any derived document
+    disagrees with it.
+  implementation:
+    - docs/INTENT.md
+  tests:
+    - tests/test_docs.py::TestIntentFile
+  note: >
+    Enforced by convention and by a test that the file exists and carries
+    a dated verbatim entry; nothing mechanical can stop a human editing it.
+
+- id: R-2
+  statement: >
+    The description must be a single, current, minimal document in human
+    language: an overview plus a flat list of statements of how the system
+    must behave, regenerated whole rather than patched, keeping no record
+    of its own past versions.
+  implementation:
+    - docs/DESC.md
+  tests:
+    - tests/test_docs.py::TestDescFile
+
+- id: R-3
+  statement: >
+    Each requirement must carry a stable identifier that survives
+    rewording, so anchors and history stay attached to the requirement
+    rather than to a sentence.
+  implementation:
+    - intentmap/model.py::Requirement
+    - intentmap/model.py::parse_map
+  tests:
+    - tests/test_model.py::TestParseMap
+    - tests/test_model.py::TestIdValidation
+
+- id: R-4
+  statement: >
+    Each requirement must be anchored to the code that implements it by
+    file path plus function or class name -- never by line number, because
+    line numbers change constantly and would rot the map on every edit.
+  implementation:
+    - intentmap/resolve.py::Anchor
+    - intentmap/resolve.py::parse_anchor
+  tests:
+    - tests/test_resolve.py::TestParseAnchor
+
+- id: R-5
+  statement: >
+    Each requirement must be anchored to the tests that prove it, by the
+    same path-plus-name addressing, so a reader can see what evidence
+    exists for each claim.
+  implementation:
+    - intentmap/model.py::Requirement
+  tests:
+    - tests/test_model.py::TestParseMap
+
+- id: R-6
+  statement: >
+    A requirement that has no test must be marked as unproven rather than
+    silently listed, so the reader can tell verified claims from asserted
+    ones.
+  implementation:
+    - intentmap/model.py::Requirement.is_proven
+    - intentmap/report.py::format_show
+  tests:
+    - tests/test_report.py::TestUnprovenMarking
+
+- id: R-7
+  statement: >
+    Anchors must be checkable: a tool must confirm every anchored file
+    exists and every anchored function or class is actually present in it,
+    and report anything stale.
+  implementation:
+    - intentmap/resolve.py::resolve
+    - intentmap/report.py::check
+  tests:
+    - tests/test_resolve.py::TestResolve
+    - tests/test_report.py::TestCheck
+
+- id: R-8
+  statement: >
+    Because anchors name symbols rather than lines, the tool must be able
+    to resolve any anchor to its current line number on demand, so a human
+    can jump straight to the code.
+  implementation:
+    - intentmap/resolve.py::resolve
+    - intentmap/cli.py::main
+  tests:
+    - tests/test_resolve.py::TestResolveLineNumbers
+
+- id: R-9
+  statement: >
+    When a symbol has been renamed or moved, git history must be used to
+    find where it went and to report the last commit that touched it, so a
+    stale anchor can be repaired rather than merely reported broken.
+  implementation:
+    - intentmap/resolve.py::search_history
+    - intentmap/resolve.py::last_commit_touching
+  tests:
+    - tests/test_resolve.py::TestHistory
+
+- id: R-10
+  statement: >
+    The map must be machine-readable and human-editable, one entry per
+    requirement, kept in the repository next to the code it describes.
+  implementation:
+    - map/intent-map.yaml
+    - intentmap/model.py::load_map
+  tests:
+    - tests/test_model.py::TestLoadMap
+    - tests/test_selfmap.py::TestSelfMap
+
+- id: R-11
+  statement: >
+    The tool must be able to report coverage: which requirements have
+    implementation anchors, which have test anchors, and which have
+    neither.
+  implementation:
+    - intentmap/report.py::CheckResult
+    - intentmap/report.py::format_check
+  tests:
+    - tests/test_report.py::TestCoverage
+
+- id: R-12
+  statement: >
+    The tool must be able to find orphans in both directions: requirements
+    with no anchors, and source symbols that no requirement claims -- the
+    second is how you notice code nobody asked for.
+  implementation:
+    - intentmap/report.py::find_orphan_symbols
+  tests:
+    - tests/test_report.py::TestOrphans
+
+- id: R-13
+  statement: >
+    The check must be runnable as one command that exits non-zero on
+    failure, so it can run in CI or a pre-commit hook and block a change
+    that breaks the correspondence.
+  implementation:
+    - intentmap/cli.py::main
+    - hooks/pre-commit
+  tests:
+    - tests/test_cli.py::TestCheckExitCode
+
+- id: R-14
+  statement: >
+    The tool must run standalone with no third-party dependencies, so
+    adopting the pattern costs a folder and nothing else.
+  implementation:
+    - intentmap/model.py::parse_map
+  tests:
+    - tests/test_selfmap.py::TestNoThirdPartyImports
+
+- id: R-15
+  statement: >
+    The pattern must be adoptable by an existing repository without
+    restructuring it: the map lives beside the code and names it by path.
+  implementation:
+    - intentmap/cli.py::main
+  tests:
+    - tests/test_cli.py::TestExternalRoot
+
+- id: R-16
+  statement: >
+    Updating the code and updating the map must be treated as one action,
+    not two, so the map cannot drift out of date between commits.
+  implementation:
+    - hooks/pre-commit
+  tests:
+    - tests/test_cli.py::TestCheckExitCode
+  note: >
+    The hook is the mechanism; the discipline is the point. A broken
+    anchor blocks the commit that broke it.
+
+- id: R-17
+  statement: >
+    A human must be able to ask for the description at any time and
+    receive a report showing each requirement with its implementation, its
+    tests, and its verification status.
+  implementation:
+    - intentmap/report.py::format_show
+    - intentmap/cli.py::main
+  tests:
+    - tests/test_report.py::TestFormatShow
+    - tests/test_cli.py::TestShowCommand
+
+- id: R-18
+  statement: >
+    The pattern must remain useful as documentation on its own: the
+    description must read as prose a person can follow without running any
+    tool.
+  implementation:
+    - docs/DESC.md
+    - README.md
+  tests:
+    - tests/test_docs.py::TestDescReadsAsProse

@@ -1,0 +1,79 @@
+# A worked example map, showing every field the format supports.
+#
+# The paths below are fictional -- this file is here to be read and
+# copied, not run. To map a real repository from outside it:
+#
+#   python3 -m intentmap --root /path/to/that/repo \
+#       --map /path/to/its-map.yaml check
+#
+# Note P-4: a requirement with no test anchor is listed as UNPROVEN
+# rather than quietly omitted. An honest gap beats a false claim.
+
+- id: P-1
+  statement: >
+    A password must never be stored in a form that can be read back, so a
+    stolen database cannot reveal what anyone typed.
+  how: >
+    Registration hashes the password with a per-user salt and a slow KDF
+    before it reaches the database layer; the plaintext exists only in
+    the request handler's local scope and is never logged. Verification
+    re-hashes the candidate and compares in constant time.
+  implementation:
+    - src/auth/passwords.py::hash_password@9f2c1ab:14-38
+    - src/auth/passwords.py::verify_password
+  tests:
+    - tests/auth/test_passwords.py::TestHashing
+    - tests/auth/test_passwords.py::TestNeverStoresPlaintext
+  depends:
+    - "P-2: the session layer trusts this comparison"
+  gotchas: >
+    The comparison must stay constant-time. An ordinary == leaks timing
+    information that narrows the search space, and the tests will not
+    catch that -- it is a review responsibility.
+
+- id: P-2
+  statement: >
+    A session must expire after thirty days of inactivity, so an
+    abandoned browser does not stay logged in forever.
+  how: >
+    Every authenticated request refreshes the session's last_seen
+    timestamp; a nightly job deletes sessions older than the window.
+    Expiry is evaluated server-side, so an edited cookie cannot extend a
+    session.
+  implementation:
+    - src/auth/sessions.py::Session.is_expired
+    - src/jobs/prune_sessions.py::run
+  tests:
+    - tests/auth/test_sessions.py::TestExpiry
+
+- id: P-3
+  statement: >
+    The public API must reject a request body larger than one megabyte,
+    so a single caller cannot exhaust memory.
+  how: >
+    The limit is enforced by middleware before any parsing happens, which
+    is what makes it a memory guarantee rather than a validation rule --
+    parsing a 500MB body to discover it is too large would already have
+    cost the memory.
+  implementation:
+    - src/api/middleware.py::BodySizeLimit
+  tests:
+    - tests/api/test_middleware.py::TestBodySizeLimit
+  gotchas: >
+    Streaming upload endpoints bypass this middleware deliberately and
+    enforce their own chunked limit; adding one without that limit
+    reopens the hole.
+
+- id: P-4
+  statement: >
+    A failed login must take roughly as long as a successful one, so
+    response time does not reveal whether an account exists.
+  how: >
+    The handler runs the same KDF work on a dummy hash when the user is
+    not found, so both paths cost the same.
+  implementation:
+    - src/auth/login.py::authenticate
+  note: >
+    UNPROVEN -- timing behavior is asserted by review and a benchmark
+    script, not by a unit test. Listed here rather than omitted so the
+    gap is visible.

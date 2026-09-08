@@ -1,0 +1,24 @@
+#!/bin/sh
+# Intent Map pre-commit hook: the map and the code move together.
+#
+# Install:  ln -s ../../hooks/pre-commit .git/hooks/pre-commit
+#
+# Blocks a commit whose anchors no longer resolve. To repair, run
+# `python -m intentmap where <anchor>` -- it searches git history for
+# where the symbol went.
+
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+if [ ! -f map/intent-map.yaml ]; then
+    exit 0    # no map in this repo; nothing to enforce
+fi
+
+if ! python3 -m intentmap check; then
+    echo ""
+    echo "intentmap: anchors are stale -- update map/intent-map.yaml (and"
+    echo "docs/DESC.md if the intent changed) in this same commit."
+    exit 1
+fi
